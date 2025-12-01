@@ -1,13 +1,19 @@
-'use client';
+"use client";
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import TrustScore from '@/components/TrustScore';
 import Link from 'next/link';
+import { getAuthToken, getUser, isAuthenticated } from '@/lib/auth';
 
 export default function AccountPage() {
+    const router = useRouter();
+    const [isLoading, setIsLoading] = useState(true);
     const [walletConnected, setWalletConnected] = useState(false);
     const [userAddress, setUserAddress] = useState(null);
     const [userData, setUserData] = useState(null);
+    const [showProfileForm, setShowProfileForm] = useState(false);
+    const [profile, setProfile] = useState({ displayName: '', email: '' });
 
     const loadUserData = () => {
         // Simulate data loading
@@ -26,7 +32,24 @@ export default function AccountPage() {
     };
 
     useEffect(() => {
-        // Check local storage on mount
+        // Check authentication first
+        if (!isAuthenticated()) {
+            router.push('/login');
+            return;
+        }
+
+        setIsLoading(false);
+        
+        // Load user data from JWT
+        const user = getUser();
+        if (user) {
+            setProfile({
+                displayName: `${user.first_name} ${user.last_name}`,
+                email: user.email
+            });
+        }
+
+        // Check local storage on mount (legacy wallet data)
         const savedConnected = localStorage.getItem('walletConnected');
         const savedAddress = localStorage.getItem('userAddress');
 
@@ -34,18 +57,91 @@ export default function AccountPage() {
             // eslint-disable-next-line react-hooks/set-state-in-effect
             setWalletConnected(true);
             setUserAddress(savedAddress);
+
+            const savedProfile = localStorage.getItem('userProfile');
+            if (savedProfile) {
+                try {
+                    const p = JSON.parse(savedProfile);
+                    setProfile(p);
+                } catch (e) {
+                    // ignore parse errors
+                }
+            }
+
             loadUserData();
+        }
+
+        // If an injected provider exists, listen for account/chain changes
+        if (typeof window !== 'undefined' && window.ethereum && window.ethereum.on) {
+            const handleAccountsChanged = (accounts) => {
+                if (accounts && accounts.length > 0) {
+                    const addr = accounts[0];
+                    setUserAddress(addr);
+                    localStorage.setItem('userAddress', addr);
+                    setWalletConnected(true);
+                    loadUserData();
+                } else {
+                    // No accounts available -> disconnected
+                    disconnectWallet();
+                }
+            };
+
+            const handleChainChanged = () => {
+                // simple handling: refresh to reset provider-related state
+                window.location.reload();
+            };
+
+            window.ethereum.on('accountsChanged', handleAccountsChanged);
+            window.ethereum.on('chainChanged', handleChainChanged);
+
+            return () => {
+                try {
+                    window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+                    window.ethereum.removeListener('chainChanged', handleChainChanged);
+                } catch (e) {
+                    // ignore cleanup errors
+                }
+            };
         }
     }, []);
 
-    const connectWallet = () => {
-        // Simulate connection
-        const address = '0x742d' + Math.random().toString(16).substr(2, 4) + '...' + Math.random().toString(16).substr(2, 4);
-        setWalletConnected(true);
-        setUserAddress(address);
-        localStorage.setItem('walletConnected', 'true');
-        localStorage.setItem('userAddress', address);
-        loadUserData();
+    const connectWallet = async () => {
+        try {
+            if (typeof window === 'undefined' || !window.ethereum) {
+                alert('No crypto wallet detected. Please install MetaMask or another Web3 wallet.');
+                return;
+            }
+
+            // Request account access
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            if (!accounts || accounts.length === 0) {
+                alert('No accounts returned from wallet.');
+                return;
+            }
+
+            const address = accounts[0];
+            setWalletConnected(true);
+            setUserAddress(address);
+            localStorage.setItem('walletConnected', 'true');
+            localStorage.setItem('userAddress', address);
+
+            // If user profile isn't present, show the profile form to collect info
+            const savedProfile = localStorage.getItem('userProfile');
+            if (!savedProfile) {
+                setShowProfileForm(true);
+            } else {
+                try {
+                    setProfile(JSON.parse(savedProfile));
+                } catch (e) {
+                    // ignore
+                }
+                loadUserData();
+            }
+
+        } catch (err) {
+            console.error('connectWallet error', err);
+            alert('Wallet connection failed: ' + (err.message || err));
+        }
     };
 
     const disconnectWallet = () => {
@@ -54,6 +150,8 @@ export default function AccountPage() {
         setUserData(null);
         localStorage.removeItem('walletConnected');
         localStorage.removeItem('userAddress');
+        // keep profile stored in case user wants to reconnect
+        setShowProfileForm(false);
     };
 
     return (
@@ -77,14 +175,51 @@ export default function AccountPage() {
                                 </p>
                                 <button
                                     className="btn btn-primary"
-                                    onClick={connectWallet}
+                                    onClick={() => router.push('/account/setup')}
                                     style={{ padding: '1rem 2rem', fontSize: 'var(--font-size-lg)' }}
                                 >
                                     🔗 Connect Wallet
                                 </button>
+                                
                                 <p style={{ marginTop: 'var(--spacing-lg)', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>
                                     We support MetaMask, WalletConnect, and more
                                 </p>
+                            </div>
+                        </div>
+                    ) : showProfileForm ? (
+                        <div className="card" style={{ padding: 'var(--spacing-md)', maxWidth: '720px', margin: '0 auto' }}>
+                            <h3 style={{ marginBottom: 'var(--spacing-md)' }}>Complete your profile</h3>
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--spacing-sm)' }}>We need a few details to personalize your account. This will be saved locally unless you choose to sync with a backend.</p>
+                            <div style={{ display: 'grid', gap: 'var(--spacing-md)' }}>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Wallet Address</label>
+                                    <div style={{ padding: '0.75rem', background: 'var(--glass-bg)', borderRadius: '8px', fontFamily: 'monospace' }}>{userAddress}</div>
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Display name</label>
+                                    <input type="text" value={profile.displayName} onChange={(e) => setProfile({ ...profile, displayName: e.target.value })} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px' }} />
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Email</label>
+                                    <input type="email" value={profile.email} onChange={(e) => setProfile({ ...profile, email: e.target.value })} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px' }} />
+                                </div>
+                                <div style={{ display: 'flex', gap: 'var(--spacing-sm)', justifyContent: 'flex-end' }}>
+                                    <button className="btn btn-secondary" onClick={() => { setShowProfileForm(false); }}>
+                                        Cancel
+                                    </button>
+                                    <button className="btn btn-primary" onClick={() => {
+                                        // Save profile locally
+                                        try {
+                                            localStorage.setItem('userProfile', JSON.stringify(profile));
+                                        } catch (e) {
+                                            console.warn('Failed to save profile', e);
+                                        }
+                                        setShowProfileForm(false);
+                                        loadUserData();
+                                    }}>
+                                        Save Profile
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     ) : (
@@ -120,7 +255,7 @@ export default function AccountPage() {
                                     </button>
                                 </div>
                             </div>
-
+                            
                             {/* Account Stats */}
                             {userData && (
                                 <div className="grid grid-3" style={{ marginBottom: 'var(--spacing-lg)' }}>

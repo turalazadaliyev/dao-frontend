@@ -6,13 +6,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "audit": "npm audit",
+    "audit:fix": "npm audit fix"
   },
   "dependencies": {
     "next": "16.0.6",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "three": "^0.181.2"
+    "three": "^0.181.2",
+    "dompurify": "^3.0.9",
+    "isomorphic-dompurify": "^2.15.0"
   },
   "devDependencies": {
     "eslint": "^9",
